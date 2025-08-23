@@ -12,6 +12,8 @@ const Key = enum(u8) {
 };
 
 const EditorConfig = struct {
+    allocator: std.mem.Allocator,
+
     cx: u16,
     cy: u16,
 
@@ -19,14 +21,16 @@ const EditorConfig = struct {
     screencols: u16,
 
     numrows: u16,
-    row: std.ArrayList(u8),
+    rows: std.ArrayList(std.ArrayList(u8)),
 
     orig_termios: posix.termios,
 };
 
 var E: EditorConfig = undefined;
 
-fn initEditor() !void {
+fn initEditor(allocator: std.mem.Allocator) !void {
+    E.allocator = allocator;
+
     var ws: posix.winsize = undefined;
     try getWindowSize(&ws);
     E.screenrows = ws.row;
@@ -34,6 +38,27 @@ fn initEditor() !void {
     E.cx = 0;
     E.cy = 0;
     E.numrows = 0;
+}
+
+fn editorOpen(filename: ?[]const u8) !void {
+    if (filename) |path| {
+        const file = try std.fs.cwd().openFile(path, .{ .mode = .read_only });
+        defer file.close();
+
+        var reader = std.io.bufferedReader(file.reader());
+        const buffer = reader.reader();
+
+        while (try buffer.readUntilDelimiterOrEofAlloc(E.allocator, '\n', std.math.maxInt(usize))) |line| {
+            defer E.allocator.free(line);
+            var row = std.ArrayList(u8).init(E.allocator);
+            try row.appendSlice(line);
+            try E.rows.append(row);
+        }
+    }
+
+    E.numrows = 1;
+    E.rows = std.ArrayList(std.ArrayList(u8)).init(E.allocator);
+    // try E.rows.appendSlice("This is a line");
 }
 
 fn enableRawMode() !void {
@@ -119,26 +144,35 @@ fn editorProcessKeypress() !void {
 
 fn editorDrawRows(abuf: *std.ArrayList(u8)) !void {
     for (0..E.screenrows) |i| {
-        if (i == E.screenrows / 3) {
-            // const welcome: [28]u8 =
-            // if (28 > E.screencols)
-            const wellen = 28;
-            var padding = (E.screencols - wellen) / 2;
-            if (padding > 0) {
+        if (i >= E.numrows) {
+            if (E.cx == 0 and i == E.screenrows / 3) {
+                // const welcome: [28]u8 =
+                // if (28 > E.screencols)
+                const wellen = 28;
+                var padding = (E.screencols - wellen) / 2;
+                if (padding > 0) {
+                    try abuf.append('~');
+                    padding -= 1;
+                }
+                while (padding > 0) {
+                    try abuf.append(' ');
+                    padding -= 1;
+                }
+                try abuf.appendSlice("Kilo editor -- version 0.0.1");
+            } else {
                 try abuf.append('~');
-                padding -= 1;
             }
-            while (padding > 0) {
-                try abuf.append(' ');
-                padding -= 1;
+            try abuf.appendSlice("\x1b[K");
+            if (i < E.screenrows - 1) {
+                try abuf.appendSlice("\r\n");
             }
-            try abuf.appendSlice("Kilo editor -- version 0.0.1");
         } else {
-            try abuf.append('~');
-        }
-        try abuf.appendSlice("\x1b[K");
-        if (i < E.screenrows - 1) {
-            try abuf.appendSlice("\r\n");
+            var len = E.rows.items.len;
+            if (len > E.screencols) len = E.screencols;
+
+            for (E.rows) |row| {
+                try abuf.appendSlice(row.items);
+            }
         }
     }
 }
@@ -228,8 +262,18 @@ fn getWindowSize(ws: *posix.winsize) !void {
 }
 
 pub fn main() !void {
+    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    defer _ = gpa.deinit();
+    const allocator = gpa.allocator();
+
     try enableRawMode();
-    try initEditor();
+    try initEditor(allocator);
+
+    var args = std.process.args();
+    _ = args.next(); // ignore first arg
+
+    try editorOpen(args.next());
+
     defer {
         stdout.print("disable raw mode\n", .{}) catch {};
         disableRawMode();
