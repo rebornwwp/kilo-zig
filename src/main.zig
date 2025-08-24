@@ -14,13 +14,15 @@ const Key = enum(u8) {
 const EditorConfig = struct {
     allocator: std.mem.Allocator,
 
-    cx: u16,
-    cy: u16,
+    cx: usize,
+    cy: usize,
 
-    screenrows: u16,
-    screencols: u16,
+    screenrows: usize,
+    screencols: usize,
 
-    numrows: u16,
+    rowoff: usize,
+    coloff: usize,
+    numrows: usize,
     rows: std.ArrayList(std.ArrayList(u8)),
 
     orig_termios: posix.termios,
@@ -37,7 +39,18 @@ fn initEditor(allocator: std.mem.Allocator) !void {
     E.screencols = ws.col;
     E.cx = 0;
     E.cy = 0;
+
+    E.rowoff = 0;
+    E.coloff = 0;
+    E.rows = std.ArrayList(std.ArrayList(u8)).init(E.allocator);
     E.numrows = 0;
+}
+
+fn deinit() void {
+    for (E.rows.items) |*item| {
+        item.deinit();
+    }
+    E.rows.deinit();
 }
 
 fn editorOpen(filename: ?[]const u8) !void {
@@ -49,16 +62,43 @@ fn editorOpen(filename: ?[]const u8) !void {
         const buffer = reader.reader();
 
         while (try buffer.readUntilDelimiterOrEofAlloc(E.allocator, '\n', std.math.maxInt(usize))) |line| {
+            // std.debug.print("xxxx: {any}", .{line});
             defer E.allocator.free(line);
             var row = std.ArrayList(u8).init(E.allocator);
             try row.appendSlice(line);
             try E.rows.append(row);
+            E.numrows += 1;
         }
     }
 
-    E.numrows = 1;
-    E.rows = std.ArrayList(std.ArrayList(u8)).init(E.allocator);
-    // try E.rows.appendSlice("This is a line");
+    // E.numrows = 1;
+    // E.rows = std.ArrayList(std.ArrayList(u8)).init(E.allocator);
+    // var row = std.ArrayList(u8).init(E.allocator);
+    // try row.appendSlice("this is a line");
+    // try E.rows.append(row);
+}
+
+fn editorAppendRow(row: *std.ArrayList(u8)) !void {
+    try E.rows.append(row.*);
+    E.numrows += 1;
+}
+
+fn editorScroll() void {
+    if (E.cy < E.rowoff) {
+        E.rowoff = E.cy;
+    }
+
+    if (E.cy >= E.rowoff + E.screenrows) {
+        E.rowoff = E.cy - E.screenrows + 1;
+    }
+
+    if (E.cx < E.coloff) {
+        E.coloff = E.cx;
+    }
+
+    if (E.cx >= E.coloff + E.screencols) {
+        E.coloff = E.cx - E.screencols + 1;
+    }
 }
 
 fn enableRawMode() !void {
@@ -144,8 +184,9 @@ fn editorProcessKeypress() !void {
 
 fn editorDrawRows(abuf: *std.ArrayList(u8)) !void {
     for (0..E.screenrows) |i| {
-        if (i >= E.numrows) {
-            if (E.cx == 0 and i == E.screenrows / 3) {
+        const filerow = i + E.rowoff;
+        if (filerow >= E.numrows) {
+            if (E.numrows == 0 and i == E.screenrows / 3) {
                 // const welcome: [28]u8 =
                 // if (28 > E.screencols)
                 const wellen = 28;
@@ -162,25 +203,27 @@ fn editorDrawRows(abuf: *std.ArrayList(u8)) !void {
             } else {
                 try abuf.append('~');
             }
-            try abuf.appendSlice("\x1b[K");
-            if (i < E.screenrows - 1) {
-                try abuf.appendSlice("\r\n");
-            }
+            // try abuf.appendSlice("\x1b[K");
+            // if (i < E.screenrows - 1) {
+            //     try abuf.appendSlice("\r\n");
+            // }
         } else {
-            var len = E.rows.items.len;
+            var len = E.rows.items[filerow].items.len - E.coloff;
+            if (len < 0) len = 0;
             if (len > E.screencols) len = E.screencols;
 
-            for (E.rows) |row| {
-                try abuf.appendSlice(row.items);
-            }
+            try abuf.appendSlice(E.rows.items[filerow].items[E.coloff..]);
+        }
+        try abuf.appendSlice("\x1b[K");
+        if (i < E.screenrows - 1) {
+            try abuf.appendSlice("\r\n");
         }
     }
 }
 
 fn editorRefreshScreen() !void {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
-    const allocator = gpa.allocator();
-    var abuf = std.ArrayList(u8).init(allocator);
+    editorScroll();
+    var abuf = std.ArrayList(u8).init(E.allocator);
     defer abuf.deinit();
 
     try abuf.appendSlice("\x1b[?25l");
@@ -189,29 +232,62 @@ fn editorRefreshScreen() !void {
     try editorDrawRows(&abuf);
 
     var buf: [64]u8 = undefined;
-    const str = try std.fmt.bufPrint(&buf, "\x1b[{d};{d}H", .{ E.cx + 1, E.cy + 1 });
+    const str = try std.fmt.bufPrint(
+        &buf,
+        "\x1b[{d};{d}H",
+        .{
+            E.cy - E.rowoff + 1,
+            E.cx - E.coloff + 1,
+        },
+    );
     try abuf.appendSlice(str);
 
-    try abuf.appendSlice("\x1b[H");
+    // try abuf.appendSlice("\x1b[H");
     try abuf.appendSlice("\x1b[?25h");
     _ = try posix.write(posix.STDOUT_FILENO, abuf.items);
 }
 
 fn editorMoveCursor(key: u8) !void {
+    const row = if (E.cy >= E.numrows) null else E.rows.items[E.cy];
     switch (key) {
         @intFromEnum(Key.left) => {
-            if (E.cx > 0) E.cx -= 1;
+            if (E.cx > 0) {
+                E.cx -= 1;
+            } else if (E.cy > 0) {
+                // 切换到上一行的行尾
+                E.cy -= 1;
+                E.cx = E.rows.items[E.cy].items.len;
+            }
         },
         @intFromEnum(Key.right) => {
-            if (E.cx <= E.screencols - 1) E.cx += 1;
+            // if (E.cx <= E.screencols - 1)
+            if (row) |r| {
+                if (E.cx < r.items.len) {
+                    E.cx += 1;
+                } else if (E.cx == r.items.len) {
+                    // 切换到下一行的行头
+                    E.cy += 1;
+                    E.cx = 0;
+                }
+            }
+            // if (row) |r| {
+            //     if (E.cx < r.items.len) {
+            //         E.cx += 1;
+            //     }
+            // }
         },
         @intFromEnum(Key.up) => {
             if (E.cy > 0) E.cy -= 1;
         },
         @intFromEnum(Key.down) => {
-            if (E.cy < E.screenrows - 1) E.cy += 1;
+            if (E.cy < E.numrows) E.cy += 1;
         },
         else => return error.InvalidValue,
+    }
+
+    const ro = if (E.cy >= E.numrows) null else E.rows.items[E.cy];
+    if (ro) |r| {
+        if (E.cx > r.items.len) E.cx = r.items.len;
     }
 }
 
@@ -277,11 +353,16 @@ pub fn main() !void {
     defer {
         stdout.print("disable raw mode\n", .{}) catch {};
         disableRawMode();
+        deinit();
     }
     // const stdout = std.io.getStdOut().writer();
     // const stdin_fd: posix.fd_t = posix.STDIN_FILENO;
 
     // var buf: [1]u8 = undefined;
+
+    // for (E.rows.items) |row| {
+    //     std.debug.print("xxxxxxxxx: {s}\n", .{row.items});
+    // }
 
     while (true) {
         try editorRefreshScreen();
