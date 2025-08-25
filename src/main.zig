@@ -1,3 +1,5 @@
+const KILO_TAB_STOP = 8;
+
 const Key = enum(u8) {
     ctrl_q = 0x11,
     ctrl_s = 0x13,
@@ -11,11 +13,17 @@ const Key = enum(u8) {
     pageDown,
 };
 
+const Row = struct {
+    row: std.ArrayList(u8),
+    render: std.ArrayList(u8),
+};
+
 const EditorConfig = struct {
     allocator: std.mem.Allocator,
 
     cx: usize,
     cy: usize,
+    rx: usize, // render curser的index
 
     screenrows: usize,
     screencols: usize,
@@ -23,7 +31,9 @@ const EditorConfig = struct {
     rowoff: usize,
     coloff: usize,
     numrows: usize,
-    rows: std.ArrayList(std.ArrayList(u8)),
+    rows: std.ArrayList(Row),
+
+    filename: ?[]const u8,
 
     orig_termios: posix.termios,
 };
@@ -40,21 +50,28 @@ fn initEditor(allocator: std.mem.Allocator) !void {
     E.cx = 0;
     E.cy = 0;
 
+    E.rx = 0;
+
     E.rowoff = 0;
     E.coloff = 0;
-    E.rows = std.ArrayList(std.ArrayList(u8)).init(E.allocator);
+    E.rows = std.ArrayList(Row).init(E.allocator);
     E.numrows = 0;
+    E.screenrows -= 1;
+    E.filename = null;
 }
 
 fn deinit() void {
     for (E.rows.items) |*item| {
-        item.deinit();
+        item.row.deinit();
+        item.render.deinit();
     }
     E.rows.deinit();
+    // E.allocator.free(E.filename);
 }
 
 fn editorOpen(filename: ?[]const u8) !void {
     if (filename) |path| {
+        E.filename = try E.allocator.dupe(u8, path);
         const file = try std.fs.cwd().openFile(path, .{ .mode = .read_only });
         defer file.close();
 
@@ -64,10 +81,13 @@ fn editorOpen(filename: ?[]const u8) !void {
         while (try buffer.readUntilDelimiterOrEofAlloc(E.allocator, '\n', std.math.maxInt(usize))) |line| {
             // std.debug.print("xxxx: {any}", .{line});
             defer E.allocator.free(line);
-            var row = std.ArrayList(u8).init(E.allocator);
-            try row.appendSlice(line);
-            try E.rows.append(row);
-            E.numrows += 1;
+            var row: Row = undefined;
+            row.row = std.ArrayList(u8).init(E.allocator);
+            row.render = std.ArrayList(u8).init(E.allocator);
+            try row.row.appendSlice(line);
+            try editorAppendRow(&row);
+            // try E.rows.append(row);
+            // E.numrows += 1;
         }
     }
 
@@ -78,12 +98,28 @@ fn editorOpen(filename: ?[]const u8) !void {
     // try E.rows.append(row);
 }
 
-fn editorAppendRow(row: *std.ArrayList(u8)) !void {
+fn editorAppendRow(row: *Row) !void {
     try E.rows.append(row.*);
+    try editorUpdateRow(row);
+
     E.numrows += 1;
 }
 
+fn editorRowCxToRx(row: *Row, cx: usize) usize {
+    var rx: usize = 0;
+    for (0..cx) |j| {
+        if (row.row.items[j] == '\t') rx += (KILO_TAB_STOP - 1) - (rx % KILO_TAB_STOP);
+        rx += 1;
+    }
+    return rx;
+}
+
 fn editorScroll() void {
+    E.rx = 0;
+    if (E.cy < E.numrows) {
+        E.rx = editorRowCxToRx(&E.rows.items[E.cy], E.cx);
+    }
+
     if (E.cy < E.rowoff) {
         E.rowoff = E.cy;
     }
@@ -92,13 +128,49 @@ fn editorScroll() void {
         E.rowoff = E.cy - E.screenrows + 1;
     }
 
-    if (E.cx < E.coloff) {
-        E.coloff = E.cx;
+    if (E.rx < E.coloff) {
+        E.coloff = E.rx;
     }
 
-    if (E.cx >= E.coloff + E.screencols) {
-        E.coloff = E.cx - E.screencols + 1;
+    if (E.rx >= E.coloff + E.screencols) {
+        E.coloff = E.rx - E.screencols + 1;
     }
+}
+
+fn editorUpdateRow(row: *Row) !void {
+    row.render.deinit();
+
+    var tabs_count: usize = 0;
+    for (row.row.items) |c| {
+        if (c == '\t') tabs_count += 1;
+    }
+    row.render = try std.ArrayList(u8).initCapacity(
+        E.allocator,
+        row.row.items.len + tabs_count * (KILO_TAB_STOP - 1) + 1,
+    );
+
+    var idx: usize = 0;
+    for (row.row.items) |c| {
+        const insert_time: usize = if (c == '\t') KILO_TAB_STOP else 1;
+        const insert_c: u8 = if (c == '\t') ' ' else c;
+        for (0..insert_time) |_| {
+            try row.render.append(insert_c);
+            idx += 1;
+        }
+    }
+    // std.debug.print("{s}\r\n", .{row.row.items});
+    // try row.render.appendSlice(row.row.items);
+    // row.render = try row.row.clone();
+    // try row.render.appendSlice(row.row.items);
+
+    // var buf: [80]u8 = undefined;
+    // _ = try std.fmt.bufPrint(&buf, "{s}\n", .{row.render.items[0..]});
+    // @panic(buf[0..]);
+}
+
+fn editorRowInsertChar(row: *Row, at: usize, c: u8) void {
+    if (at < 0 or at > row.items.len) at = row.items.len;
+    row.row.insert(at, c);
 }
 
 fn enableRawMode() !void {
@@ -173,11 +245,11 @@ fn editorProcessKeypress() !void {
             try editorMoveCursor(c);
         },
         else => {
-            if (std.ascii.isControl(c)) {
-                try stdout.print("control 0x{x}\r\n", .{c});
-            } else {
-                try stdout.print("key {c} 0x{x}\r\n", .{ c, c });
-            }
+            // if (std.ascii.isControl(c)) {
+            //     try stdout.print("control 0x{x}\r\n", .{c});
+            // } else {
+            //     try stdout.print("key {c} 0x{x}\r\n", .{ c, c });
+            // }
         },
     }
 }
@@ -208,17 +280,35 @@ fn editorDrawRows(abuf: *std.ArrayList(u8)) !void {
             //     try abuf.appendSlice("\r\n");
             // }
         } else {
-            var len = E.rows.items[filerow].items.len - E.coloff;
+            var len = E.rows.items[filerow].render.items.len - E.coloff;
             if (len < 0) len = 0;
             if (len > E.screencols) len = E.screencols;
 
-            try abuf.appendSlice(E.rows.items[filerow].items[E.coloff..]);
+            // try abuf.appendSlice(E.rows.items[filerow].row.items[E.coloff..]);
+            // try abuf.appendSlice(E.rows.items[filerow].render.items[E.coloff..]);
+            try abuf.appendSlice(E.rows.items[filerow].render.items[E.coloff..]);
         }
         try abuf.appendSlice("\x1b[K");
-        if (i < E.screenrows - 1) {
-            try abuf.appendSlice("\r\n");
-        }
+        // if (i < E.screenrows - 1) {
+        try abuf.appendSlice("\r\n");
+        // }
     }
+}
+
+fn editorDrawStatusBar(abuf: *std.ArrayList(u8)) !void {
+    try abuf.appendSlice("\x1b[7m");
+    var status: [80]u8 = undefined;
+    const filename = if (E.filename) |path|
+        path
+    else
+        "[No Name]";
+    var result = try std.fmt.bufPrint(&status, "{s} - {d} lines", .{ filename, E.numrows });
+    // const len = if (status.len > E.screencols) E.screencols else status.len;
+    try abuf.appendSlice(result[0..result.len]);
+    for (result.len..E.screencols) |_| {
+        try abuf.append(' ');
+    }
+    try abuf.appendSlice("\x1b[m");
 }
 
 fn editorRefreshScreen() !void {
@@ -230,6 +320,7 @@ fn editorRefreshScreen() !void {
     // try abuf.appendSlice("\x1b[2J");
     try abuf.appendSlice("\x1b[H");
     try editorDrawRows(&abuf);
+    try editorDrawStatusBar(&abuf);
 
     var buf: [64]u8 = undefined;
     const str = try std.fmt.bufPrint(
@@ -237,7 +328,7 @@ fn editorRefreshScreen() !void {
         "\x1b[{d};{d}H",
         .{
             E.cy - E.rowoff + 1,
-            E.cx - E.coloff + 1,
+            E.rx - E.coloff + 1,
         },
     );
     try abuf.appendSlice(str);
@@ -256,15 +347,15 @@ fn editorMoveCursor(key: u8) !void {
             } else if (E.cy > 0) {
                 // 切换到上一行的行尾
                 E.cy -= 1;
-                E.cx = E.rows.items[E.cy].items.len;
+                E.cx = E.rows.items[E.cy].row.items.len;
             }
         },
         @intFromEnum(Key.right) => {
             // if (E.cx <= E.screencols - 1)
             if (row) |r| {
-                if (E.cx < r.items.len) {
+                if (E.cx < r.row.items.len) {
                     E.cx += 1;
-                } else if (E.cx == r.items.len) {
+                } else if (E.cx == r.row.items.len) {
                     // 切换到下一行的行头
                     E.cy += 1;
                     E.cx = 0;
@@ -287,7 +378,7 @@ fn editorMoveCursor(key: u8) !void {
 
     const ro = if (E.cy >= E.numrows) null else E.rows.items[E.cy];
     if (ro) |r| {
-        if (E.cx > r.items.len) E.cx = r.items.len;
+        if (E.cx > r.row.items.len) E.cx = r.row.items.len;
     }
 }
 
