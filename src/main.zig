@@ -168,10 +168,31 @@ fn editorUpdateRow(row: *Row) !void {
     // @panic(buf[0..]);
 }
 
-fn editorRowInsertChar(row: *Row, at: usize, c: u8) void {
-    if (at < 0 or at > row.items.len) at = row.items.len;
-    row.row.insert(at, c);
+fn editorRowInsertChar(row: *Row, at: usize, c: u8) !void {
+    const idx = if (at < 0 or at > row.row.items.len)
+        row.row.items.len
+    else
+        at;
+    try row.row.insert(idx, c);
+    try editorUpdateRow(row);
 }
+
+fn editorInsertChar(c: u8) !void {
+    if (E.cy == E.numrows) {
+        var row: Row = .{
+            .row = std.ArrayList(u8).init(E.allocator),
+            .render = std.ArrayList(u8).init(E.allocator),
+        };
+        try editorAppendRow(&row);
+    }
+    try editorRowInsertChar(&E.rows.items[E.cy], E.cx, c);
+    E.cx += 1;
+}
+
+fn editorRowsToString(int buflen) {
+
+}
+
 
 fn enableRawMode() !void {
     const orig_term = try posix.tcgetattr(posix.STDIN_FILENO);
@@ -244,7 +265,10 @@ fn editorProcessKeypress() !void {
         => {
             try editorMoveCursor(c);
         },
+        '\r' => {},
         else => {
+            try stdout.print("key {c} 0x{x}\r\n", .{ c, c });
+            try editorInsertChar(c);
             // if (std.ascii.isControl(c)) {
             //     try stdout.print("control 0x{x}\r\n", .{c});
             // } else {
