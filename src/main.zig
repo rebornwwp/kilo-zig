@@ -36,6 +36,8 @@ const EditorConfig = struct {
     filename: ?[]const u8,
 
     orig_termios: posix.termios,
+
+    should_quit: bool = false,
 };
 
 var E: EditorConfig = undefined;
@@ -189,15 +191,14 @@ fn editorInsertChar(c: u8) !void {
     E.cx += 1;
 }
 
-fn editorRowsToString(int buflen) {
+// fn editorRowsToString(int buflen) {
 
-}
-
+// }
 
 fn enableRawMode() !void {
     const orig_term = try posix.tcgetattr(posix.STDIN_FILENO);
     E.orig_termios = orig_term;
-    var term = E.orig_termios;
+    var term = orig_term;
 
     term.iflag.IXON = false; // ctrl-S + ctrl-Q
     term.iflag.ICRNL = false;
@@ -217,13 +218,48 @@ fn enableRawMode() !void {
     term.cc[@intFromEnum(posix.V.MIN)] = 0;
     term.cc[@intFromEnum(posix.V.TIME)] = 1;
 
-    try posix.tcsetattr(posix.STDIN_FILENO, .FLUSH, term);
+    // try posix.tcsetattr(posix.STDIN_FILENO, .FLUSH, term);
 }
 
 fn disableRawMode() void {
-    posix.tcsetattr(posix.STDIN_FILENO, .FLUSH, E.orig_termios) catch {
-        @panic("Disable raw mode failed!\n");
-    };
+    // posix.tcsetattr(posix.STDIN_FILENO, .FLUSH, E.orig_termios) catch {
+    //     @panic("Disable raw mode failed!\n");
+    // };
+}
+
+/// Enable terminal raw mode, return previous configuration.
+pub fn enableRawMode1() !linux.termios {
+    const orig_termios = try posix.tcgetattr(posix.STDIN_FILENO);
+
+    // make a copy
+    var termios = orig_termios;
+
+    // Terminal mode flags:
+    termios.lflag.ECHO = false; // don't echo input characters
+    termios.lflag.ICANON = false; // read input byte-by-byte instead of line-by-line
+    termios.lflag.ISIG = false; // disable Ctrl-C and Ctrl-Z signals
+    termios.iflag.IXON = false; // disable Ctrl-S and Ctrl-Q signals
+    termios.lflag.IEXTEN = false; // disable Ctrl-V
+    termios.iflag.ICRNL = false; // CTRL-M being read as \n
+    termios.oflag.OPOST = false; // disable output processing
+    termios.iflag.BRKINT = false; // break conditions cause SIGINT signal
+    termios.iflag.INPCK = false; // disable parity checking (obsolete?)
+    termios.iflag.ISTRIP = false; // disable stripping of 8th bit
+    termios.cflag.CSIZE = .CS8; // set character size to 8 bits
+
+    // Set read timeouts
+    termios.cc[@intFromEnum(linux.V.MIN)] = 0; // Return immediately when any bytes are available
+    termios.cc[@intFromEnum(linux.V.TIME)] = 1; // Wait up to 0.1 seconds for input
+
+    // update config
+    try posix.tcsetattr(posix.STDIN_FILENO, .FLUSH, termios);
+
+    return orig_termios;
+}
+
+/// Disable terminal raw mode by restoring the saved configuration.
+pub fn disableRawMode1(termios: linux.termios) void {
+    posix.tcsetattr(posix.STDIN_FILENO, .FLUSH, termios) catch @panic("Disabling raw mode failed!");
 }
 
 fn editorReadKey() !u8 {
@@ -255,8 +291,9 @@ fn editorProcessKeypress() !void {
         => {
             _ = try posix.write(posix.STDOUT_FILENO, "\x1b[2J");
             _ = try posix.write(posix.STDOUT_FILENO, "\x1b[H");
-            posix.exit(0);
-            return error.InvalidValue;
+            E.should_quit = true;
+            // posix.exit(0);
+            // return error.InvalidValue;
         },
         @intFromEnum(Key.up),
         @intFromEnum(Key.down),
@@ -267,7 +304,7 @@ fn editorProcessKeypress() !void {
         },
         '\r' => {},
         else => {
-            try stdout.print("key {c} 0x{x}\r\n", .{ c, c });
+            // try stdout.print("key {c} 0x{x}\r\n", .{ c, c });
             try editorInsertChar(c);
             // if (std.ascii.isControl(c)) {
             //     try stdout.print("control 0x{x}\r\n", .{c});
@@ -457,29 +494,26 @@ pub fn main() !void {
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
 
-    try enableRawMode();
+    const origin = try enableRawMode1();
+    defer disableRawMode1(origin);
     try initEditor(allocator);
+    defer deinit();
 
-    var args = std.process.args();
-    _ = args.next(); // ignore first arg
+    // var args = std.process.args();
+    // _ = args.next(); // ignore first arg
 
-    try editorOpen(args.next());
+    // try editorOpen(args.next());
 
-    defer {
-        stdout.print("disable raw mode\n", .{}) catch {};
-        disableRawMode();
-        deinit();
-    }
-    // const stdout = std.io.getStdOut().writer();
-    // const stdin_fd: posix.fd_t = posix.STDIN_FILENO;
+    // // const stdout = std.io.getStdOut().writer();
+    // // const stdin_fd: posix.fd_t = posix.STDIN_FILENO;
 
-    // var buf: [1]u8 = undefined;
+    // // var buf: [1]u8 = undefined;
 
-    // for (E.rows.items) |row| {
-    //     std.debug.print("xxxxxxxxx: {s}\n", .{row.items});
-    // }
+    // // for (E.rows.items) |row| {
+    // //     std.debug.print("xxxxxxxxx: {s}\n", .{row.items});
+    // // }
 
-    while (true) {
+    while (E.should_quit == false) {
         try editorRefreshScreen();
         try editorProcessKeypress();
         // const n = try posix.read(stdin_fd, &buf);

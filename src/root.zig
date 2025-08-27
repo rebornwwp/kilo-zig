@@ -4,10 +4,18 @@
 const std = @import("std");
 const testing = std.testing;
 
-pub export fn add(a: i32, b: i32) i32 {
-    return a + b;
-}
+const A = struct {
+    a: usize,
+    b: usize,
+};
+test "hello world" {
+    const demo: A = .{
+        .a = 10,
+        .b = 20,
+    };
 
-test "basic add functionality" {
-    try testing.expect(add(3, 7) == 10);
+    var x = demo;
+    x.a = 1000;
+
+    std.debug.print("{any}\n {any}\n", .{ demo, x });
 }
