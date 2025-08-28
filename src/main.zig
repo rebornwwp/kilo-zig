@@ -233,6 +233,13 @@ fn disableRawMode() void {
     };
 }
 
+fn isDigit(c: u8) bool {
+    switch (c) {
+        '0'...'9' => return true,
+        else => return false,
+    }
+}
+
 fn editorReadKey() !Key {
     var buf: [1]u8 = undefined;
     const n = try posix.read(posix.STDIN_FILENO, &buf);
@@ -242,8 +249,22 @@ fn editorReadKey() !Key {
     const k: Key = @enumFromInt(buf[0]);
     if (k == .esc) {
         var seq: [3]u8 = undefined;
-        _ = try posix.read(posix.STDIN_FILENO, &seq);
+        const nread = try posix.read(posix.STDIN_FILENO, &seq);
         if (seq[0] == '[') {
+            if (nread == 3 and isDigit(seq[1])) {
+                if (seq[2] == '~') {
+                    switch (seq[1]) {
+                        '1' => return .home,
+                        '3' => return .del,
+                        '4' => return .end,
+                        '5' => return .page_up,
+                        '6' => return .page_down,
+                        '7' => return .home,
+                        '8' => return .end,
+                        else => {},
+                    }
+                }
+            }
             switch (seq[1]) {
                 'A' => return .up, // up
                 'B' => return .down, // down
@@ -254,7 +275,7 @@ fn editorReadKey() !Key {
                 else => {},
             }
         } else if (seq[0] == 'O') {
-            switch (seq[2]) {
+            switch (seq[1]) {
                 'H' => return .home,
                 'F' => return .end,
                 else => {},
