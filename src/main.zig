@@ -70,11 +70,13 @@ fn initEditor(allocator: std.mem.Allocator) !void {
 
 fn deinit() void {
     for (E.rows.items) |*item| {
+        std.debug.print("YYYYY: {s}\n", .{item.row.items});
+        std.debug.print("XXXXX: {s}\n", .{item.render.items});
         item.row.deinit();
         item.render.deinit();
     }
     E.rows.deinit();
-    // E.allocator.free(E.filename);
+    E.allocator.free(E.filename.?);
 }
 
 fn editorOpen(filename: ?[]const u8) !void {
@@ -86,16 +88,18 @@ fn editorOpen(filename: ?[]const u8) !void {
         var reader = std.io.bufferedReader(file.reader());
         const buffer = reader.reader();
 
-        while (try buffer.readUntilDelimiterOrEofAlloc(E.allocator, '\n', std.math.maxInt(usize))) |line| {
-            // std.debug.print("xxxx: {any}", .{line});
+        while (try buffer.readUntilDelimiterOrEofAlloc(
+            E.allocator,
+            '\n',
+            std.math.maxInt(usize),
+        )) |line| {
             defer E.allocator.free(line);
-            var row: Row = undefined;
-            row.row = std.ArrayList(u8).init(E.allocator);
-            row.render = std.ArrayList(u8).init(E.allocator);
+            var row: Row = .{
+                .row = std.ArrayList(u8).init(E.allocator),
+                .render = std.ArrayList(u8).init(E.allocator),
+            };
             try row.row.appendSlice(line);
             try editorAppendRow(&row);
-            // try E.rows.append(row);
-            // E.numrows += 1;
         }
     }
 
@@ -109,7 +113,6 @@ fn editorOpen(filename: ?[]const u8) !void {
 fn editorAppendRow(row: *Row) !void {
     try E.rows.append(row.*);
     try editorUpdateRow(row);
-
     E.numrows += 1;
 }
 
@@ -152,20 +155,25 @@ fn editorUpdateRow(row: *Row) !void {
     for (row.row.items) |c| {
         if (c == '\t') tabs_count += 1;
     }
-    row.render = try std.ArrayList(u8).initCapacity(
-        E.allocator,
-        row.row.items.len + tabs_count * (KILO_TAB_STOP - 1) + 1,
-    );
+    row.render = try row.row.clone();
 
-    var idx: usize = 0;
-    for (row.row.items) |c| {
-        const insert_time: usize = if (c == '\t') KILO_TAB_STOP else 1;
-        const insert_c: u8 = if (c == '\t') ' ' else c;
-        for (0..insert_time) |_| {
-            try row.render.append(insert_c);
-            idx += 1;
-        }
-    }
+    std.debug.print("x1: {s}\n", .{row.row.items});
+    std.debug.print("x2: {s}\n", .{row.render.items});
+    // try row.render.appendSlice(row.row.items);
+    // row.render = try std.ArrayList(u8).initCapacity(
+    //     E.allocator,
+    //     row.row.items.len + tabs_count * (KILO_TAB_STOP - 1) + 1,
+    // );
+    // // row.render = std.ArrayList(u8).init(E.allocator);
+
+    // for (row.row.items) |c| {
+    //     try row.render.append(c);
+    //     // const insert_time: usize = if (c == '\t') KILO_TAB_STOP else 1;
+    //     // const insert_c: u8 = if (c == '\t') ' ' else c;
+    //     // for (0..insert_time) |_| {
+    //     //     try row.render.append(insert_c);
+    //     // }
+    // }
     // std.debug.print("{s}\r\n", .{row.row.items});
     // try row.render.appendSlice(row.row.items);
     // row.render = try row.row.clone();
@@ -224,13 +232,13 @@ fn enableRawMode() !void {
     term.cc[@intFromEnum(posix.V.MIN)] = 0;
     term.cc[@intFromEnum(posix.V.TIME)] = 1;
 
-    try posix.tcsetattr(posix.STDIN_FILENO, .FLUSH, term);
+    // try posix.tcsetattr(posix.STDIN_FILENO, .FLUSH, term);
 }
 
 fn disableRawMode() void {
-    posix.tcsetattr(posix.STDIN_FILENO, .FLUSH, E.orig_termios) catch {
-        @panic("Disable raw mode failed!\n");
-    };
+    // posix.tcsetattr(posix.STDIN_FILENO, .FLUSH, E.orig_termios) catch {
+    //     @panic("Disable raw mode failed!\n");
+    // };
 }
 
 fn isDigit(c: u8) bool {
@@ -288,23 +296,16 @@ fn editorReadKey() !Key {
 fn editorProcessKeypress() !void {
     const k = try editorReadKey();
     switch (k) {
-        Key.ctrl_q,
-        => {
+        Key.ctrl_q => {
             _ = try posix.write(posix.STDOUT_FILENO, "\x1b[2J");
             _ = try posix.write(posix.STDOUT_FILENO, "\x1b[H");
             E.should_quit = true;
             // posix.exit(0);
             // return error.InvalidValue;
         },
-        Key.up,
-        Key.down,
-        Key.left,
-        Key.right,
-        => {
+        Key.up, Key.down, Key.left, Key.right => {
             try editorMoveCursor(k);
         },
-        Key.esc,
-        => {},
         else => {
             const c = @intFromEnum(k);
             if (std.ascii.isPrint(c) and !std.ascii.isControl(c)) try editorInsertChar(c);
@@ -341,9 +342,6 @@ fn editorDrawRows(abuf: *std.ArrayList(u8)) !void {
             var len = E.rows.items[filerow].render.items.len - E.coloff;
             if (len < 0) len = 0;
             if (len > E.screencols) len = E.screencols;
-
-            // try abuf.appendSlice(E.rows.items[filerow].row.items[E.coloff..]);
-            // try abuf.appendSlice(E.rows.items[filerow].render.items[E.coloff..]);
             try abuf.appendSlice(E.rows.items[filerow].render.items[E.coloff..]);
         }
         try abuf.appendSlice("\x1b[K");
@@ -496,10 +494,10 @@ pub fn main() !void {
     try initEditor(allocator);
     defer deinit();
 
-    // var args = std.process.args();
-    // _ = args.next(); // ignore first arg
+    var args = std.process.args();
+    _ = args.next(); // ignore first arg
 
-    // try editorOpen(args.next());
+    try editorOpen(args.next());
 
     // // const stdout = std.io.getStdOut().writer();
     // // const stdin_fd: posix.fd_t = posix.STDIN_FILENO;
@@ -510,22 +508,26 @@ pub fn main() !void {
     // //     std.debug.print("xxxxxxxxx: {s}\n", .{row.items});
     // // }
 
-    while (E.should_quit == false) {
-        try editorRefreshScreen();
-        try editorProcessKeypress();
-        // const n = try posix.read(stdin_fd, &buf);
-        // if (n == 0) break;
-        // const b = buf[0];
-        // if(std.ascii.isControl(b)) {
-        //     try stdout.print("control 0x{x}\r\n", .{b});
-        // } else {
-        //     try stdout.print("key {c} 0x{x}\r\n", .{b, b});
-        // }
-        // if (b == ctrl_q or b == 'q') {
-        //     try stdout.print("\nquit\n", .{});
-        //     break;
-        // }
-    }
+    try editorRefreshScreen();
+    // try editorProcessKeypress();
+    return;
+
+    // while (E.should_quit == false) {
+    //     try editorRefreshScreen();
+    //     try editorProcessKeypress();
+    //     // const n = try posix.read(stdin_fd, &buf);
+    //     // if (n == 0) break;
+    //     // const b = buf[0];
+    //     // if(std.ascii.isControl(b)) {
+    //     //     try stdout.print("control 0x{x}\r\n", .{b});
+    //     // } else {
+    //     //     try stdout.print("key {c} 0x{x}\r\n", .{b, b});
+    //     // }
+    //     // if (b == ctrl_q or b == 'q') {
+    //     //     try stdout.print("\nquit\n", .{});
+    //     //     break;
+    //     // }
+    // }
 }
 
 const std = @import("std");

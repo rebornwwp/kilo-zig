@@ -9,13 +9,17 @@ const A = struct {
     b: usize,
 };
 test "hello world" {
-    const demo: A = .{
-        .a = 10,
-        .b = 20,
-    };
+    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    defer _ = gpa.deinit();
+    const allocator = gpa.allocator();
+    var a = std.ArrayList(u8).init(allocator);
+    defer a.deinit();
 
-    var x = demo;
-    x.a = 1000;
+    // const x = "hello world";
+    try a.appendSlice("hello world");
+    const b = try a.clone();
+    defer b.deinit();
 
-    std.debug.print("{any}\n {any}\n", .{ demo, x });
+    std.debug.print("a {s}\n", .{a.items});
+    std.debug.print("b {s}\n", .{b.items});
 }
