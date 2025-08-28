@@ -285,16 +285,8 @@ fn editorProcessKeypress() !void {
         Key.esc,
         => {},
         else => {
-            // try stdout.print("key {c} 0x{x}\r\n", .{ c, c });
             const c = @intFromEnum(k);
-            if (std.ascii.isPrint(c) and !std.ascii.isControl(c)) {
-                try editorInsertChar(c);
-            }
-            // if (std.ascii.isControl(c)) {
-            //     try stdout.print("control 0x{x}\r\n", .{c});
-            // } else {
-            //     try stdout.print("key {c} 0x{x}\r\n", .{ c, c });
-            // }
+            if (std.ascii.isPrint(c) and !std.ascii.isControl(c)) try editorInsertChar(c);
         },
     }
 }
