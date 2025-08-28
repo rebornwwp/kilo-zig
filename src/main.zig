@@ -5,12 +5,18 @@ const Key = enum(u8) {
     ctrl_s = 0x13,
     ctrl_d = 0x04,
     ctrl_a = 0x01,
-    up = 'w',
-    down = 's',
-    left = 'a',
-    right = 'd',
-    pageUp,
-    pageDown,
+    esc = 0x1b,
+
+    left = 127,
+    right,
+    up,
+    down,
+    del,
+    home,
+    end,
+    page_up,
+    page_down,
+    _,
 };
 
 const Row = struct {
@@ -218,76 +224,50 @@ fn enableRawMode() !void {
     term.cc[@intFromEnum(posix.V.MIN)] = 0;
     term.cc[@intFromEnum(posix.V.TIME)] = 1;
 
-    // try posix.tcsetattr(posix.STDIN_FILENO, .FLUSH, term);
+    try posix.tcsetattr(posix.STDIN_FILENO, .FLUSH, term);
 }
 
 fn disableRawMode() void {
-    // posix.tcsetattr(posix.STDIN_FILENO, .FLUSH, E.orig_termios) catch {
-    //     @panic("Disable raw mode failed!\n");
-    // };
+    posix.tcsetattr(posix.STDIN_FILENO, .FLUSH, E.orig_termios) catch {
+        @panic("Disable raw mode failed!\n");
+    };
 }
 
-/// Enable terminal raw mode, return previous configuration.
-pub fn enableRawMode1() !linux.termios {
-    const orig_termios = try posix.tcgetattr(posix.STDIN_FILENO);
-
-    // make a copy
-    var termios = orig_termios;
-
-    // Terminal mode flags:
-    termios.lflag.ECHO = false; // don't echo input characters
-    termios.lflag.ICANON = false; // read input byte-by-byte instead of line-by-line
-    termios.lflag.ISIG = false; // disable Ctrl-C and Ctrl-Z signals
-    termios.iflag.IXON = false; // disable Ctrl-S and Ctrl-Q signals
-    termios.lflag.IEXTEN = false; // disable Ctrl-V
-    termios.iflag.ICRNL = false; // CTRL-M being read as \n
-    termios.oflag.OPOST = false; // disable output processing
-    termios.iflag.BRKINT = false; // break conditions cause SIGINT signal
-    termios.iflag.INPCK = false; // disable parity checking (obsolete?)
-    termios.iflag.ISTRIP = false; // disable stripping of 8th bit
-    termios.cflag.CSIZE = .CS8; // set character size to 8 bits
-
-    // Set read timeouts
-    termios.cc[@intFromEnum(linux.V.MIN)] = 0; // Return immediately when any bytes are available
-    termios.cc[@intFromEnum(linux.V.TIME)] = 1; // Wait up to 0.1 seconds for input
-
-    // update config
-    try posix.tcsetattr(posix.STDIN_FILENO, .FLUSH, termios);
-
-    return orig_termios;
-}
-
-/// Disable terminal raw mode by restoring the saved configuration.
-pub fn disableRawMode1(termios: linux.termios) void {
-    posix.tcsetattr(posix.STDIN_FILENO, .FLUSH, termios) catch @panic("Disabling raw mode failed!");
-}
-
-fn editorReadKey() !u8 {
+fn editorReadKey() !Key {
     var buf: [1]u8 = undefined;
     const n = try posix.read(posix.STDIN_FILENO, &buf);
     if (n == -1) {
         @panic("die");
     }
-    if (buf[0] == '\x1b') {
+    const k: Key = @enumFromInt(buf[0]);
+    if (k == .esc) {
         var seq: [3]u8 = undefined;
         _ = try posix.read(posix.STDIN_FILENO, &seq);
         if (seq[0] == '[') {
             switch (seq[1]) {
-                'A' => return @intFromEnum(Key.up), // up
-                'B' => return @intFromEnum(Key.down), // down
-                'C' => return @intFromEnum(Key.right), // right
-                'D' => return @intFromEnum(Key.left), // left
-                else => return buf[0],
+                'A' => return .up, // up
+                'B' => return .down, // down
+                'C' => return .right, // right
+                'D' => return .left, // left
+                'H' => return .home,
+                'F' => return .end,
+                else => {},
+            }
+        } else if (seq[0] == 'O') {
+            switch (seq[2]) {
+                'H' => return .home,
+                'F' => return .end,
+                else => {},
             }
         }
     }
-    return buf[0];
+    return k;
 }
 
 fn editorProcessKeypress() !void {
-    const c = try editorReadKey();
-    switch (c) {
-        @intFromEnum(Key.ctrl_q),
+    const k = try editorReadKey();
+    switch (k) {
+        Key.ctrl_q,
         => {
             _ = try posix.write(posix.STDOUT_FILENO, "\x1b[2J");
             _ = try posix.write(posix.STDOUT_FILENO, "\x1b[H");
@@ -295,17 +275,21 @@ fn editorProcessKeypress() !void {
             // posix.exit(0);
             // return error.InvalidValue;
         },
-        @intFromEnum(Key.up),
-        @intFromEnum(Key.down),
-        @intFromEnum(Key.left),
-        @intFromEnum(Key.right),
+        Key.up,
+        Key.down,
+        Key.left,
+        Key.right,
         => {
-            try editorMoveCursor(c);
+            try editorMoveCursor(k);
         },
-        '\r' => {},
+        Key.esc,
+        => {},
         else => {
             // try stdout.print("key {c} 0x{x}\r\n", .{ c, c });
-            try editorInsertChar(c);
+            const c = @intFromEnum(k);
+            if (std.ascii.isPrint(c) and !std.ascii.isControl(c)) {
+                try editorInsertChar(c);
+            }
             // if (std.ascii.isControl(c)) {
             //     try stdout.print("control 0x{x}\r\n", .{c});
             // } else {
@@ -399,10 +383,10 @@ fn editorRefreshScreen() !void {
     _ = try posix.write(posix.STDOUT_FILENO, abuf.items);
 }
 
-fn editorMoveCursor(key: u8) !void {
+fn editorMoveCursor(key: Key) !void {
     const row = if (E.cy >= E.numrows) null else E.rows.items[E.cy];
     switch (key) {
-        @intFromEnum(Key.left) => {
+        Key.left => {
             if (E.cx > 0) {
                 E.cx -= 1;
             } else if (E.cy > 0) {
@@ -411,7 +395,7 @@ fn editorMoveCursor(key: u8) !void {
                 E.cx = E.rows.items[E.cy].row.items.len;
             }
         },
-        @intFromEnum(Key.right) => {
+        Key.right => {
             // if (E.cx <= E.screencols - 1)
             if (row) |r| {
                 if (E.cx < r.row.items.len) {
@@ -428,10 +412,10 @@ fn editorMoveCursor(key: u8) !void {
             //     }
             // }
         },
-        @intFromEnum(Key.up) => {
+        Key.up => {
             if (E.cy > 0) E.cy -= 1;
         },
-        @intFromEnum(Key.down) => {
+        Key.down => {
             if (E.cy < E.numrows) E.cy += 1;
         },
         else => return error.InvalidValue,
@@ -494,8 +478,8 @@ pub fn main() !void {
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
 
-    const origin = try enableRawMode1();
-    defer disableRawMode1(origin);
+    try enableRawMode();
+    defer disableRawMode();
     try initEditor(allocator);
     defer deinit();
 
