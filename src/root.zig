@@ -4,22 +4,53 @@
 const std = @import("std");
 const testing = std.testing;
 
+var allocator: std.mem.Allocator = undefined;
+const self = @This();
 const A = struct {
-    a: usize,
-    b: usize,
+    a: std.ArrayList(u8),
 };
-test "hello world" {
+
+var ab: A = undefined;
+
+fn func1(a: *A) !void {
+    a.a.deinit();
+    a.a = std.ArrayList(u8).init(self.allocator);
+    try a.a.appendSlice("ehllwl");
+}
+
+fn init() void {
+    self.ab = .{ .a = std.ArrayList(u8).init(self.allocator) };
+}
+
+fn deinit() void {
+    ab.a.deinit();
+}
+
+fn hello() !void {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     defer _ = gpa.deinit();
-    const allocator = gpa.allocator();
-    var a = std.ArrayList(u8).init(allocator);
-    defer a.deinit();
+    self.allocator = gpa.allocator();
+    self.init();
+    defer self.deinit();
 
-    // const x = "hello world";
-    try a.appendSlice("hello world");
-    const b = try a.clone();
-    defer b.deinit();
+    try func1(&self.ab);
+}
 
-    std.debug.print("a {s}\n", .{a.items});
-    std.debug.print("b {s}\n", .{b.items});
+test "hello world" {
+    try hello();
+    // var a = std.ArrayList(u8).init(allocator);
+
+    // // const x = "hello world";
+    // try a.appendSlice("hello world");
+    // const b = try a.clone();
+    // defer b.deinit();
+
+    // std.debug.print("a {s}\n", .{a.items});
+    // a.deinit();
+    // a = std.ArrayList(u8).init(allocator);
+    // try a.appendSlice("hello wo");
+    // defer a.deinit();
+    // std.debug.print("a {s}\n", .{a.items});
+
+    // std.debug.print("b {s}\n", .{b.items});
 }

@@ -76,13 +76,18 @@ fn deinit() void {
         item.render.deinit();
     }
     E.rows.deinit();
-    E.allocator.free(E.filename.?);
+    if (E.filename) |m| {
+        E.allocator.free(m);
+    }
 }
 
 fn editorOpen(filename: ?[]const u8) !void {
     if (filename) |path| {
         E.filename = try E.allocator.dupe(u8, path);
-        const file = try std.fs.cwd().openFile(path, .{ .mode = .read_only });
+        const file = try std.fs.cwd().openFile(
+            path,
+            .{ .mode = .read_only },
+        );
         defer file.close();
 
         var reader = std.io.bufferedReader(file.reader());
@@ -99,6 +104,7 @@ fn editorOpen(filename: ?[]const u8) !void {
                 .render = std.ArrayList(u8).init(E.allocator),
             };
             try row.row.appendSlice(line);
+            // try E.rows.append(row);
             try editorAppendRow(&row);
         }
     }
@@ -149,16 +155,19 @@ fn editorScroll() void {
 }
 
 fn editorUpdateRow(row: *Row) !void {
+    // const render = row.render;
     row.render.deinit();
 
-    var tabs_count: usize = 0;
-    for (row.row.items) |c| {
-        if (c == '\t') tabs_count += 1;
-    }
-    row.render = try row.row.clone();
+    // var tabs_count: usize = 0;
+    // for (row.row.items) |c| {
+    //     if (c == '\t') tabs_count += 1;
+    // }
+    row.render = std.ArrayList(u8).init(E.allocator);
+    try row.render.appendSlice(row.row.items);
 
     std.debug.print("x1: {s}\n", .{row.row.items});
     std.debug.print("x2: {s}\n", .{row.render.items});
+    // render.deinit();
     // try row.render.appendSlice(row.row.items);
     // row.render = try std.ArrayList(u8).initCapacity(
     //     E.allocator,
@@ -508,7 +517,7 @@ pub fn main() !void {
     // //     std.debug.print("xxxxxxxxx: {s}\n", .{row.items});
     // // }
 
-    try editorRefreshScreen();
+    // try editorRefreshScreen();
     // try editorProcessKeypress();
     return;
 
