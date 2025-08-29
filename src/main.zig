@@ -117,8 +117,8 @@ fn editorOpen(filename: ?[]const u8) !void {
 }
 
 fn editorAppendRow(row: *Row) !void {
-    try E.rows.append(row.*);
     try editorUpdateRow(row);
+    try E.rows.append(row.*);
     E.numrows += 1;
 }
 
@@ -158,31 +158,30 @@ fn editorUpdateRow(row: *Row) !void {
     // const render = row.render;
     row.render.deinit();
 
-    // var tabs_count: usize = 0;
-    // for (row.row.items) |c| {
-    //     if (c == '\t') tabs_count += 1;
-    // }
-    row.render = std.ArrayList(u8).init(E.allocator);
-    try row.render.appendSlice(row.row.items);
+    var tabs_count: usize = 0;
+    for (row.row.items) |c| {
+        if (c == '\t') tabs_count += 1;
+    }
+    // row.render = std.ArrayList(u8).init(E.allocator);
+    // try row.render.appendSlice(row.row.items);
 
-    std.debug.print("x1: {s}\n", .{row.row.items});
-    std.debug.print("x2: {s}\n", .{row.render.items});
+    // std.debug.print("x1: {s}\n", .{row.row.items});
+    // std.debug.print("x2: {s}\n", .{row.render.items});
     // render.deinit();
     // try row.render.appendSlice(row.row.items);
-    // row.render = try std.ArrayList(u8).initCapacity(
-    //     E.allocator,
-    //     row.row.items.len + tabs_count * (KILO_TAB_STOP - 1) + 1,
-    // );
-    // // row.render = std.ArrayList(u8).init(E.allocator);
+    row.render = try std.ArrayList(u8).initCapacity(
+        E.allocator,
+        row.row.items.len + tabs_count * (KILO_TAB_STOP - 1) + 1,
+    );
+    // row.render = std.ArrayList(u8).init(E.allocator);
 
-    // for (row.row.items) |c| {
-    //     try row.render.append(c);
-    //     // const insert_time: usize = if (c == '\t') KILO_TAB_STOP else 1;
-    //     // const insert_c: u8 = if (c == '\t') ' ' else c;
-    //     // for (0..insert_time) |_| {
-    //     //     try row.render.append(insert_c);
-    //     // }
-    // }
+    for (row.row.items) |c| {
+        const insert_time: usize = if (c == '\t') KILO_TAB_STOP else 1;
+        const insert_c: u8 = if (c == '\t') ' ' else c;
+        for (0..insert_time) |_| {
+            try row.render.append(insert_c);
+        }
+    }
     // std.debug.print("{s}\r\n", .{row.row.items});
     // try row.render.appendSlice(row.row.items);
     // row.render = try row.row.clone();
@@ -241,13 +240,13 @@ fn enableRawMode() !void {
     term.cc[@intFromEnum(posix.V.MIN)] = 0;
     term.cc[@intFromEnum(posix.V.TIME)] = 1;
 
-    // try posix.tcsetattr(posix.STDIN_FILENO, .FLUSH, term);
+    try posix.tcsetattr(posix.STDIN_FILENO, .FLUSH, term);
 }
 
 fn disableRawMode() void {
-    // posix.tcsetattr(posix.STDIN_FILENO, .FLUSH, E.orig_termios) catch {
-    //     @panic("Disable raw mode failed!\n");
-    // };
+    posix.tcsetattr(posix.STDIN_FILENO, .FLUSH, E.orig_termios) catch {
+        @panic("Disable raw mode failed!\n");
+    };
 }
 
 fn isDigit(c: u8) bool {
@@ -305,14 +304,14 @@ fn editorReadKey() !Key {
 fn editorProcessKeypress() !void {
     const k = try editorReadKey();
     switch (k) {
-        Key.ctrl_q => {
+        .ctrl_q => {
             _ = try posix.write(posix.STDOUT_FILENO, "\x1b[2J");
             _ = try posix.write(posix.STDOUT_FILENO, "\x1b[H");
             E.should_quit = true;
             // posix.exit(0);
             // return error.InvalidValue;
         },
-        Key.up, Key.down, Key.left, Key.right => {
+        .up, .down, .left, .right => {
             try editorMoveCursor(k);
         },
         else => {
@@ -406,7 +405,7 @@ fn editorRefreshScreen() !void {
 fn editorMoveCursor(key: Key) !void {
     const row = if (E.cy >= E.numrows) null else E.rows.items[E.cy];
     switch (key) {
-        Key.left => {
+        .left => {
             if (E.cx > 0) {
                 E.cx -= 1;
             } else if (E.cy > 0) {
@@ -415,7 +414,7 @@ fn editorMoveCursor(key: Key) !void {
                 E.cx = E.rows.items[E.cy].row.items.len;
             }
         },
-        Key.right => {
+        .right => {
             // if (E.cx <= E.screencols - 1)
             if (row) |r| {
                 if (E.cx < r.row.items.len) {
@@ -432,10 +431,10 @@ fn editorMoveCursor(key: Key) !void {
             //     }
             // }
         },
-        Key.up => {
+        .up => {
             if (E.cy > 0) E.cy -= 1;
         },
-        Key.down => {
+        .down => {
             if (E.cy < E.numrows) E.cy += 1;
         },
         else => return error.InvalidValue,
@@ -519,24 +518,24 @@ pub fn main() !void {
 
     // try editorRefreshScreen();
     // try editorProcessKeypress();
-    return;
+    // return;
 
-    // while (E.should_quit == false) {
-    //     try editorRefreshScreen();
-    //     try editorProcessKeypress();
-    //     // const n = try posix.read(stdin_fd, &buf);
-    //     // if (n == 0) break;
-    //     // const b = buf[0];
-    //     // if(std.ascii.isControl(b)) {
-    //     //     try stdout.print("control 0x{x}\r\n", .{b});
-    //     // } else {
-    //     //     try stdout.print("key {c} 0x{x}\r\n", .{b, b});
-    //     // }
-    //     // if (b == ctrl_q or b == 'q') {
-    //     //     try stdout.print("\nquit\n", .{});
-    //     //     break;
-    //     // }
-    // }
+    while (E.should_quit == false) {
+        try editorRefreshScreen();
+        try editorProcessKeypress();
+        // const n = try posix.read(stdin_fd, &buf);
+        // if (n == 0) break;
+        // const b = buf[0];
+        // if(std.ascii.isControl(b)) {
+        //     try stdout.print("control 0x{x}\r\n", .{b});
+        // } else {
+        //     try stdout.print("key {c} 0x{x}\r\n", .{b, b});
+        // }
+        // if (b == ctrl_q or b == 'q') {
+        //     try stdout.print("\nquit\n", .{});
+        //     break;
+        // }
+    }
 }
 
 const std = @import("std");
