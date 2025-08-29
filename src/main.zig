@@ -64,14 +64,14 @@ fn initEditor(allocator: std.mem.Allocator) !void {
     E.coloff = 0;
     E.rows = std.ArrayList(Row).init(E.allocator);
     E.numrows = 0;
-    E.screenrows -= 1;
+    E.screenrows -= 2;
     E.filename = null;
 }
 
 fn deinit() void {
     for (E.rows.items) |*item| {
-        std.debug.print("YYYYY: {s}\n", .{item.row.items});
-        std.debug.print("XXXXX: {s}\n", .{item.render.items});
+        // std.debug.print("YYYYY: {s}\n", .{item.row.items});
+        // std.debug.print("XXXXX: {s}\n", .{item.render.items});
         item.row.deinit();
         item.render.deinit();
     }
@@ -314,6 +314,22 @@ fn editorProcessKeypress() !void {
         .up, .down, .left, .right => {
             try editorMoveCursor(k);
         },
+        .page_up, .page_down => {
+            if (k == .page_up) {
+                E.cy = E.rowoff;
+            } else if (k == .page_down) {
+                E.cy = E.rowoff + E.screenrows - 1;
+                if (E.cy > E.numrows) E.cy = E.numrows;
+            }
+            for (0..E.screenrows) |_| {
+                try editorMoveCursor(if (k == .page_up) .up else .down);
+            }
+        },
+        .home => E.cx = 0,
+        .end => {
+            if (E.cy < E.numrows) E.cx = E.rows.items[E.cy].row.items.len;
+        },
+
         else => {
             const c = @intFromEnum(k);
             if (std.ascii.isPrint(c) and !std.ascii.isControl(c)) try editorInsertChar(c);
@@ -373,6 +389,7 @@ fn editorDrawStatusBar(abuf: *std.ArrayList(u8)) !void {
         try abuf.append(' ');
     }
     try abuf.appendSlice("\x1b[m");
+    try abuf.appendSlice("\r\n");
 }
 
 fn editorRefreshScreen() !void {
@@ -385,6 +402,7 @@ fn editorRefreshScreen() !void {
     try abuf.appendSlice("\x1b[H");
     try editorDrawRows(&abuf);
     try editorDrawStatusBar(&abuf);
+    try editorDrawMessageBar(&abuf);
 
     var buf: [64]u8 = undefined;
     const str = try std.fmt.bufPrint(
@@ -400,6 +418,15 @@ fn editorRefreshScreen() !void {
     // try abuf.appendSlice("\x1b[H");
     try abuf.appendSlice("\x1b[?25h");
     _ = try posix.write(posix.STDOUT_FILENO, abuf.items);
+}
+
+// fn editorSetStatusMessage(fmt: []u8) void {
+
+// }
+
+fn editorDrawMessageBar(abuf: *std.ArrayList(u8)) !void {
+    try abuf.appendSlice("\x1b[K");
+    try abuf.appendSlice("hello world");
 }
 
 fn editorMoveCursor(key: Key) !void {
