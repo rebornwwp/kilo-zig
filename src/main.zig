@@ -201,6 +201,8 @@ fn editorRowInsertChar(row: *Row, at: usize, c: u8) !void {
     try editorUpdateRow(row);
 }
 
+fn editorSave() !void {}
+
 fn editorInsertChar(c: u8) !void {
     if (E.cy == E.numrows) {
         var row: Row = .{
@@ -212,6 +214,30 @@ fn editorInsertChar(c: u8) !void {
     try editorRowInsertChar(&E.rows.items[E.cy], E.cx, c);
     E.cx += 1;
 }
+
+fn deleteAt(list: *std.ArrayList(u8), index: usize) void {
+    if (index >= list.items.len) return;
+    // 把 index+1..end 的元素往前移
+    std.mem.copyForwards(u8, list.items[index..], list.items[index + 1 ..]);
+    // 长度减一
+    list.shrinkRetainingCapacity(list.items.len - 1);
+}
+
+fn editorDelChar() !void {
+    if (E.cy == E.numrows) return;
+    if (E.cx > 0) {
+        const row = &E.rows.items[E.cy];
+        // editorRowDelChar(row, E.cx - 1);
+        deleteAt(&row.row, E.cx - 1);
+        try editorUpdateRow(row);
+        E.cx -= 1;
+    }
+}
+
+// fn editorRowDelChar(row: *Row, idx: usize) void {
+//     row.row.swapRemove(idx);
+//     editorUpdateRow(row);
+// }
 
 // fn editorRowsToString(int buflen) {
 
@@ -328,6 +354,10 @@ fn editorProcessKeypress() !void {
         .home => E.cx = 0,
         .end => {
             if (E.cy < E.numrows) E.cx = E.rows.items[E.cy].row.items.len;
+        },
+        .del => {
+            try editorMoveCursor(.right);
+            try editorDelChar();
         },
 
         else => {
