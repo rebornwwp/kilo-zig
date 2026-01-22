@@ -19,7 +19,7 @@ fn func1(a: *A) !void {
 }
 
 fn init() void {
-    self.ab = .{ .a = std.ArrayList(u8).init(self.allocator) };
+    self.ab = .{ .a = try std.ArrayList(u8).initCapacity(self.allocator, 10) };
 }
 
 fn deinit() void {

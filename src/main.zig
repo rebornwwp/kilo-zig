@@ -62,7 +62,7 @@ fn initEditor(allocator: std.mem.Allocator) !void {
 
     E.rowoff = 0;
     E.coloff = 0;
-    E.rows = std.ArrayList(Row).init(E.allocator);
+    E.rows = try std.ArrayList(Row).initCapacity(E.allocator, 10);
     E.numrows = 0;
     E.screenrows -= 2;
     E.filename = null;
@@ -72,10 +72,10 @@ fn deinit() void {
     for (E.rows.items) |*item| {
         // std.debug.print("YYYYY: {s}\n", .{item.row.items});
         // std.debug.print("XXXXX: {s}\n", .{item.render.items});
-        item.row.deinit();
-        item.render.deinit();
+        item.row.deinit(E.allocator);
+        item.render.deinit(E.allocator);
     }
-    E.rows.deinit();
+    E.rows.deinit(E.allocator);
     if (E.filename) |m| {
         E.allocator.free(m);
     }
@@ -84,28 +84,36 @@ fn deinit() void {
 fn editorOpen(filename: ?[]const u8) !void {
     if (filename) |path| {
         E.filename = try E.allocator.dupe(u8, path);
-        const file = try std.fs.cwd().openFile(
+        const file = std.fs.cwd().openFile(
             path,
             .{ .mode = .read_only },
-        );
+        ) catch |err| switch (err) {
+            error.FileNotFound => {
+                std.debug.print("File not found: {s}\n", .{path});
+                return;
+            },
+            else => {
+                std.debug.print("Could not open file: {s}\n", .{path});
+                return;
+            },
+        };
         defer file.close();
 
-        var reader = std.io.bufferedReader(file.reader());
-        const buffer = reader.reader();
+        var buffer: [2048]u8 = undefined;
+        var file_reader = file.reader(&buffer);
 
-        while (try buffer.readUntilDelimiterOrEofAlloc(
-            E.allocator,
-            '\n',
-            std.math.maxInt(usize),
-        )) |line| {
-            defer E.allocator.free(line);
+        while (file_reader.interface.takeDelimiterInclusive('\n')) |line| {
             var row: Row = .{
-                .row = std.ArrayList(u8).init(E.allocator),
-                .render = std.ArrayList(u8).init(E.allocator),
+                .row = .empty,
+                .render = .empty,
             };
-            try row.row.appendSlice(line);
+            try row.row.appendSlice(E.allocator, line);
             // try E.rows.append(row);
             try editorAppendRow(&row);
+        } else |err| switch (err) {
+            else => {
+                std.debug.print("Error reading file: {any}\n", .{err});
+            },
         }
     }
 
@@ -118,7 +126,7 @@ fn editorOpen(filename: ?[]const u8) !void {
 
 fn editorAppendRow(row: *Row) !void {
     try editorUpdateRow(row);
-    try E.rows.append(row.*);
+    try E.rows.append(E.allocator, row.*);
     E.numrows += 1;
 }
 
@@ -156,7 +164,7 @@ fn editorScroll() void {
 
 fn editorUpdateRow(row: *Row) !void {
     // const render = row.render;
-    row.render.deinit();
+    row.render.deinit(E.allocator);
 
     var tabs_count: usize = 0;
     for (row.row.items) |c| {
@@ -179,7 +187,7 @@ fn editorUpdateRow(row: *Row) !void {
         const insert_time: usize = if (c == '\t') KILO_TAB_STOP else 1;
         const insert_c: u8 = if (c == '\t') ' ' else c;
         for (0..insert_time) |_| {
-            try row.render.append(insert_c);
+            try row.render.append(E.allocator, insert_c);
         }
     }
     // std.debug.print("{s}\r\n", .{row.row.items});
@@ -197,7 +205,7 @@ fn editorRowInsertChar(row: *Row, at: usize, c: u8) !void {
         row.row.items.len
     else
         at;
-    try row.row.insert(idx, c);
+    try row.row.insert(E.allocator, idx, c);
     try editorUpdateRow(row);
 }
 
@@ -206,8 +214,8 @@ fn editorSave() !void {}
 fn editorInsertChar(c: u8) !void {
     if (E.cy == E.numrows) {
         var row: Row = .{
-            .row = std.ArrayList(u8).init(E.allocator),
-            .render = std.ArrayList(u8).init(E.allocator),
+            .row = .empty,
+            .render = .empty,
         };
         try editorAppendRow(&row);
     }
@@ -377,16 +385,16 @@ fn editorDrawRows(abuf: *std.ArrayList(u8)) !void {
                 const wellen = 28;
                 var padding = (E.screencols - wellen) / 2;
                 if (padding > 0) {
-                    try abuf.append('~');
+                    try abuf.append(E.allocator, '~');
                     padding -= 1;
                 }
                 while (padding > 0) {
-                    try abuf.append(' ');
+                    try abuf.append(E.allocator, ' ');
                     padding -= 1;
                 }
-                try abuf.appendSlice("Kilo editor -- version 0.0.1");
+                try abuf.appendSlice(E.allocator, "Kilo editor -- version 0.0.1");
             } else {
-                try abuf.append('~');
+                try abuf.append(E.allocator, '~');
             }
             // try abuf.appendSlice("\x1b[K");
             // if (i < E.screenrows - 1) {
@@ -396,17 +404,17 @@ fn editorDrawRows(abuf: *std.ArrayList(u8)) !void {
             var len = E.rows.items[filerow].render.items.len - E.coloff;
             if (len < 0) len = 0;
             if (len > E.screencols) len = E.screencols;
-            try abuf.appendSlice(E.rows.items[filerow].render.items[E.coloff..]);
+            try abuf.appendSlice(E.allocator, E.rows.items[filerow].render.items[E.coloff..]);
         }
-        try abuf.appendSlice("\x1b[K");
+        try abuf.appendSlice(E.allocator, "\x1b[K");
         // if (i < E.screenrows - 1) {
-        try abuf.appendSlice("\r\n");
+        try abuf.appendSlice(E.allocator, "\r\n");
         // }
     }
 }
 
 fn editorDrawStatusBar(abuf: *std.ArrayList(u8)) !void {
-    try abuf.appendSlice("\x1b[7m");
+    try abuf.appendSlice(E.allocator, "\x1b[7m");
     var status: [80]u8 = undefined;
     const filename = if (E.filename) |path|
         path
@@ -414,22 +422,22 @@ fn editorDrawStatusBar(abuf: *std.ArrayList(u8)) !void {
         "[No Name]";
     var result = try std.fmt.bufPrint(&status, "{s} - {d} lines", .{ filename, E.numrows });
     // const len = if (status.len > E.screencols) E.screencols else status.len;
-    try abuf.appendSlice(result[0..result.len]);
+    try abuf.appendSlice(E.allocator, result[0..result.len]);
     for (result.len..E.screencols) |_| {
-        try abuf.append(' ');
+        try abuf.append(E.allocator, ' ');
     }
-    try abuf.appendSlice("\x1b[m");
-    try abuf.appendSlice("\r\n");
+    try abuf.appendSlice(E.allocator, "\x1b[m");
+    try abuf.appendSlice(E.allocator, "\r\n");
 }
 
 fn editorRefreshScreen() !void {
     editorScroll();
-    var abuf = std.ArrayList(u8).init(E.allocator);
-    defer abuf.deinit();
+    var abuf: std.ArrayList(u8) = .empty;
+    defer abuf.deinit(E.allocator);
 
-    try abuf.appendSlice("\x1b[?25l");
+    try abuf.appendSlice(E.allocator, "\x1b[?25l");
     // try abuf.appendSlice("\x1b[2J");
-    try abuf.appendSlice("\x1b[H");
+    try abuf.appendSlice(E.allocator, "\x1b[H");
     try editorDrawRows(&abuf);
     try editorDrawStatusBar(&abuf);
     try editorDrawMessageBar(&abuf);
@@ -443,10 +451,10 @@ fn editorRefreshScreen() !void {
             E.rx - E.coloff + 1,
         },
     );
-    try abuf.appendSlice(str);
+    try abuf.appendSlice(E.allocator, str);
 
     // try abuf.appendSlice("\x1b[H");
-    try abuf.appendSlice("\x1b[?25h");
+    try abuf.appendSlice(E.allocator, "\x1b[?25h");
     _ = try posix.write(posix.STDOUT_FILENO, abuf.items);
 }
 
@@ -455,8 +463,8 @@ fn editorRefreshScreen() !void {
 // }
 
 fn editorDrawMessageBar(abuf: *std.ArrayList(u8)) !void {
-    try abuf.appendSlice("\x1b[K");
-    try abuf.appendSlice("hello world");
+    try abuf.appendSlice(E.allocator, "\x1b[K");
+    try abuf.appendSlice(E.allocator, "hello world");
 }
 
 fn editorMoveCursor(key: Key) !void {
