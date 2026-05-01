@@ -1,6 +1,5 @@
 zig-out/
 zig-cache/
 .zig-cache/
-.qoder/
 a.txt
 main
