@@ -1,2 +1,8 @@
-/.zig-cache
-/zig-out
+zig-out/
+zig-cache/
+.zig-cache/
+.qoder/
+a.txt
+main
+kilo-zig/
+kilo/
