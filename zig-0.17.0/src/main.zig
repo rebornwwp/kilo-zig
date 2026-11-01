@@ -11,9 +11,10 @@ fn handleSigWinCh(_: std.c.SIG) callconv(.c) void {
 pub fn main(init: std.process.Init) !void {
     const allocator = init.gpa;
     const io = init.io;
+    const arena = init.arena.allocator();
 
-    const args = try init.minimal.args.toSlice(init.arena.allocator());
-    defer init.arena.allocator().free(args);
+    const args = try init.minimal.args.toSlice(arena);
+    defer arena.free(args);
 
     if (args.len != 2) {
         try std.Io.File.stderr().writeStreamingAll(io, "Usage: kilo <filename>\n");
