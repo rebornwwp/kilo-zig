@@ -13,7 +13,7 @@ zig-0.17.0/
     ├── main.zig     # 入口、SIGWINCH、主循环
     ├── Editor.zig   # 编辑器核心：编辑、光标、文件 I/O、查找、渲染
     ├── Row.zig      # 行数据结构与渲染缓存
-    ├── terminal.zig # 原始模式、按键解析、窗口大小
+    ├── terminal.zig # /dev/tty、原始模式、按键解析、窗口大小
     └── syntax.zig   # 语法高亮
 ```
 
@@ -32,8 +32,20 @@ zig build run -- <filename>
 | 按键 | 功能 |
 | --- | --- |
 | `Ctrl-S` | 保存 |
-| `Ctrl-Q` | 退出（有未保存修改时需连续按 3 次） |
+| `Ctrl-Q` | 退出（有未保存修改时会先警告 3 次，之后再按一次才退出） |
 | `Ctrl-F` | 查找（`ESC` 退出，方向键切换匹配项） |
+
+## 终端访问方式
+
+编辑器不再直接使用 stdin/stdout，而是由 `terminal.Terminal` 打开 `/dev/tty`：
+
+- `Terminal.init` 在启动时打开当前进程的控制终端，`Editor.init` 持有这个 `Terminal`。
+- 按键读取、ANSI 渲染输出、窗口大小查询都通过同一个 tty fd 完成。
+- 因此即使把标准输入/输出重定向到文件或管道，只要进程还有控制终端，TUI 仍然显示在真实终端上。
+- `Editor.deinit` 会先恢复 termios，再关闭 `/dev/tty`；`main` 用 `return` 退出，保证 `defer` 中的清理逻辑会执行。
+- 如果进程没有控制终端（例如部分 CI/容器环境），打开 `/dev/tty` 会失败，程序直接报错退出。这是有意为之，不会回退到 stdin/stdout。
+
+自动化测试需要给子进程分配伪终端（pty），并通过 `TIOCSWINSZ` 设置窗口大小；否则 `getWindowSize` 会走 `ESC[6n` 回退并等待终端响应。
 
 ---
 
@@ -165,14 +177,15 @@ zig build -Doptimize=ReleaseSafe       ✅
 zig fmt --check .                      ✅
 ```
 
-运行时验证（使用伪终端提供 24×80 窗口）：
+运行时验证（使用伪终端提供 24×80 窗口，并让子进程通过 `/dev/tty` 访问该 pty）：
 
 - 能正常进入原始模式并渲染文件内容；
 - 正确显示 `hello` / `world` 两行测试文本；
-- 按下 `Ctrl-Q` 后正常退出，退出码为 `0`。
+- 按下 `Ctrl-Q` 后正常退出，退出码为 `0`；
+- 退出后终端 termios 恢复为进入前的设置。
 
 ## 与上游的关系
 
 - 项目来源与教程：<https://viewsourcecode.org/snaptoken/kilo/index.html>
 - 原始 kilo 作者：Salvatore Sanfilippo（antirez），BSD 2-Clause。
-- 本目录仅做 Zig 0.17.0 迁移，不改变编辑器的功能与行为。
+- 本目录完成 Zig 0.17.0 迁移，并在保持编辑功能不变的前提下，将终端访问统一改为 `/dev/tty`。
